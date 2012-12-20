@@ -3,7 +3,7 @@
   "description": "A locally hosted duplicate of AWS Simple Notification Service",
   "version": "0.0.1",
   "scripts": {
-    "start": "node app.js"
+    "start": "node index.js"
   },
   "repository": {
     "type": "git",
