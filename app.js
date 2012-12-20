@@ -1,3 +1,4 @@
+var crypto = require('crypto');
 var http = require('http');
 var https = require('https');
 var url = require('url');
@@ -6,6 +7,7 @@ var http = require('http');
 var builder = require('xmlbuilder');
 var argparser = require('argparse').ArgumentParser;
 var _ = require('underscore');
+var Fiber = require('fibers');
 
 var default_delivery_policy = {
   http: {
@@ -27,11 +29,11 @@ var default_delivery_policy = {
 };
 
 var parser = new argparser({description: 'Fake Simple Notification Service'});
-parser.addArgument(['--port', '-p'], {help: 'The port number to use', type: 'int', defaultValue: 80});
-parser.addArgument(['--region', '-r'], {help: 'The region used when creating topic arns', defaultValue: 'us-east-1'});
-parser.addArgument(['--account-id', '-a'], {help: 'The AWS account ID used when creating topic arns', type: 'int', defaultValue: 123456789012});
-parser.addArgument(['--topic-limit', '-l'], {help: 'The limit of topics allowed', type: 'int', defaultValue: 100});
-parser.addArgument(['--subscribe-hostname', '-h'], {help: 'The hostname used to form the subscription confirmation URL', defaultValue: 'localhost'});
+parser.addArgument(['--port', '-p'], {help: 'The port number to use (default: 80)', type: 'int', defaultValue: 80});
+parser.addArgument(['--region', '-r'], {help: 'The region used when creating topic ARNs (default: "us-east-1")', defaultValue: 'us-east-1'});
+parser.addArgument(['--account-id', '-a'], {help: 'The AWS account ID used when creating topic ARNs (default: 123456789012)', type: 'int', defaultValue: 123456789012});
+parser.addArgument(['--topic-limit', '-l'], {help: 'The limit of topics allowed (default: 100)', type: 'int', defaultValue: 100});
+parser.addArgument(['--subscribe-hostname', '-s'], {help: 'The hostname used to form the subscription confirmation URL (default: localhost)', defaultValue: 'localhost'});
 var args = parser.parseArgs();
 
 var app = express();
@@ -97,8 +99,11 @@ function error(res, code) {
   res.end(error_response.end({pretty: true, indent: '  '}));
 }
 
-function merge_policies(subscription, topic) {
-  var topic_policy = _.clone(topic.DeliveryPolicy.http || {});
+function merge_policies(topic, subscription) {
+  var topic_policy = {};
+
+  if ('DeliveryPolicy' in topic && 'http' in topic.DeliveryPolicy)
+    topic_policy = _.clone(topic.DeliveryPolicy.http);
   _.defaults(topic_policy, default_delivery_policy.http);
 
   var disable_overrides = topic_policy.disableSubscriptionOverrides;
@@ -108,55 +113,61 @@ function merge_policies(subscription, topic) {
   topic_policy.throttlePolicy = topic_policy.defaultThrottlePolicy;
   delete topic_policy.defaultThrottlePolicy;
 
-  if (disable_overrides)
+  if (disable_overrides || !subscription)
     return topic_policy;
 
-  var policy = _.clone(subscription.DeliveryPolicy);
+  var policy = _.clone(subscription.DeliveryPolicy || {});
   _.defaults(policy, topic_policy);
 
   return policy;
 }
 
 function send_message(options, callback) {
-  var parsed = url.parse(options.endpoint);
+  var parsed = url.parse(options.subscription.endpoint);
   var msg_id = options.message_id;
 
   if (!msg_id)
     msg_id = get_request_id();
 
-  var opts = {hostname: parsed.host, method: 'POST', path: parsed.path};
+  var opts = {hostname: parsed.hostname, method: 'POST', path: parsed.path};
   if ('port' in parsed)
     opts.port = parsed.port;
 
   opts.headers = {
     'x-amz-sns-message-type': options.message_type,
     'x-amz-sns-message-id': msg_id,
-    'x-amz-sns-topic-arn': options.topic_arn,
-    'x-amz-sns-subscription-arn': options.subscription_arn,
+    'x-amz-sns-topic-arn': options.topic.TopicArn,
+    'x-amz-sns-subscription-arn': options.subscription.SubscriptionArn,
     'Content-Type': 'text/plain; charset=UTF-8',
     'User-Agent': 'Fake Amazon Simple Notification Service Agent',
   };
 
-  var req = (parsed.protocol == 'http' ? http : https).request(options);
+  var req = (parsed.protocol == 'http:' ? http : https).request(opts);
   req.setTimeout(15*1000);
-  req.on('response', callback);
+  req.on('response', function(res) {
+    callback(null, res);
+  });
+  req.on('error', callback);
 
   var body = {
     Type: options.message_type,
     MessageId: msg_id,
-    TopicArn: options.topic_arn,
+    TopicArn: options.topic.TopicArn,
     Timestamp: options.timestamp,
+    SignatureVersion: '0',
+    Signature: 'None',
+    SigningCertURL: 'None',
   };
 
   if (options.message_type == 'SubscriptionConfirmation') {
-    body.Token: options.token;
-    body.Message = 'You have chosen to subscribe to the topic ' + options.topic_arn + '.\nTo confirm the subscription, visit the SubscribeURL included in this message.';
-    body.SubscribeURL: 'http://' + args.subscribe_hostname + '/?Action=ConfirmSubscription&TopicArn=' + options.topic_arn + '&Token=' + options.token;
+    body.Token = options.token;
+    body.Message = 'You have chosen to subscribe to the topic ' + options.topic.TopicArn + '.\nTo confirm the subscription, visit the SubscribeURL included in this message.';
+    body.SubscribeURL = 'http://' + args.subscribe_hostname + '/?Action=ConfirmSubscription&TopicArn=' + options.topic.TopicArn + '&Token=' + options.token;
   } else if (options.message_type == 'Notification') {
     if (options.subject)
-      body.Subject: options.subject;
-    body.Message: options.message;
-    body.UnsubscribeURL: 'http://' + args.subscribe_hostname + '/?Action=Unsubscribe&SubscriptionArn=' + options.subscription_arn;
+      body.Subject = options.subject;
+    body.Message = options.message;
+    body.UnsubscribeURL = 'http://' + args.subscribe_hostname + '/?Action=Unsubscribe&SubscriptionArn=' + options.subscription.SubscriptionArn;
   }
 
   req.end(JSON.stringify(body));
@@ -182,7 +193,7 @@ function confirm_subscription(req, res) {
   subscriptions[unconfirmed.arn] = topic;
   delete topic.unconfirmed[req.query.Token];
 
-  var response = builder.create('SubscribeResponse');
+  var response = builder.create('ConfirmSubscriptionResponse');
   response.att('xmlns', 'http://sns.amazonaws.com/doc/2010-03-31/');
   var result = response.ele('ConfirmSubscriptionResult');
   result.ele('SubscriptionArn', unconfirmed.arn);
@@ -213,7 +224,7 @@ function create_topic(req, res) {
   var arn = 'arn:aws:sns:' + args.region + ':' + args.account_id + ':' + req.query.Name;
 
   if (arn in topics)
-    return response(topics[req.query.Name].TopicArn);
+    return response(arn);
 
   if (Object.keys(topics).length >= args.topic_limit)
     return error(res, 'TopicLimitExceeded');
@@ -267,7 +278,7 @@ function get_subscription_attributes(req, res) {
 
   entry = attributes.ele('entry');
   entry.ele('key', 'EffectiveDeliveryPolicy');
-  entry.ele('value', JSON.stringify(merge_policies(subscription, topic)));
+  entry.ele('value', JSON.stringify(merge_policies(topic, subscription)));
 
   var metadata = response.ele('ResponseMetadata');
   metadata.ele('RequestId', get_request_id());
@@ -428,39 +439,25 @@ function list_topics(req, res) {
   res.end(response.end({pretty: true, indent: '  '}));
 }
 
-function publish_http(topic, subscription, message_id, message, subject) {
-  var opts = {
-    endpoint: subscription.endpoint,
-    topic_arn: topic.TopicArn,
-    subscription_arn: subscription.SubscriptionArn,
-    message_type: 'Notification',
-    message_id: message_id,
-    subject: subject,
-    message: message,
-    timestamp: new Date().toISOString(),
-  };
-
-  var policy = merge_policies(subscription, topic).healthyRetryPolicy;
-
-      minDelayTarget: 20,
-      maxDelayTarget: 20,
-      numRetries: 3,
-      numMaxDelayRetries: 0,
-      numNoDelayRetries: 0,
-      numMinDelayRetries: 0,
-      backoffFunction: 'linear',
+function publish_http(opts, callback) {
+  var policy = merge_policies(opts.topic, opts.subscription).healthyRetryPolicy;
 
   new Fiber(function() {
     var fiber = Fiber.current;
 
+    var retries = policy.numNoDelayRetries + policy.numMinDelayRetries + policy.numRetries + policy.numMaxDelayRetries;
     for (var i = 0; i <= retries; i++) {
-      send_message(opts, function(res) {
-        fiber.run(res.statusCode >= 200 && res.statusCode < 500);
+      send_message(opts, function(err, res) {
+        if (err) {
+          console.log('Failed to publish message for topic ' + opts.topic.TopicArn + ' to endpoint ' + opts.subscription.endpoint + ': ' + err);
+          fiber.run(false);
+        } else
+          fiber.run(res.statusCode >= 200 && res.statusCode < 500);
       });
-      var success = fiber.yield();
+      var success = Fiber.yield();
 
       if (success)
-        return;
+        return callback();
 
       var delay;
       if (i < policy.numNoDelayRetries)
@@ -475,16 +472,16 @@ function publish_http(topic, subscription, message_id, message, subject) {
           var step = i - policy.numNoDelayRetries + policy.numMinDelayRetries;
 
           switch (policy.backoffFunction) {
-            case 'Arithmetic':
+            case 'arithmetic':
               delay += d * step * (step + 1) / ((policy.numRetries - 1) * policy.numRetries);
               break;
 
-            case 'Geometric': /* FIXME: Not sure how to calculate this one off the top of my head, Exponential is good enough */
-            case 'Exponential':
+            case 'geometric': /* FIXME: Not sure how to calculate this one off the top of my head, Exponential is good enough */
+            case 'exponential':
               delay += d * (Math.pow(2, step) - 1) / (Math.pow(2, policy.numRetries - 1) - 1);
               break;
 
-            /* We shouldn't have anything else other than 'Linear', but best to be safe */
+            /* We shouldn't have anything else other than 'linear', but best to be safe */
             default:
               delay += d * step / (policy.numRetries - 1);
               break;
@@ -496,8 +493,10 @@ function publish_http(topic, subscription, message_id, message, subject) {
       setTimeout(function() {
         fiber.run();
       }, delay * 1000);
-      fiber.yield();
+      Fiber.yield();
     }
+
+    callback(new Error('Failed to send message for topic ' + opts.topics.TopicArn + ' to HTTP(s) endpoint ' + opts.subscription.endpoint));
   }).run();
 }
 
@@ -537,8 +536,19 @@ function publish(req, res) {
 
   var msg_id = get_request_id();
 
-  for (var arn in topic.subscriptions)
-    publish_http(topic, topic.subscriptions[arn], msg_id, message, subject);
+  var opts = {
+    topic: topic,
+    message_type: 'Notification',
+    message_id: msg_id,
+    subject: subject,
+    message: message,
+    timestamp: new Date().toISOString(),
+  };
+
+  for (var arn in topic.subscriptions) {
+    opts.subscription = topic.subscriptions[arn];
+    publish_http(opts);
+  }
 
   var response = builder.create('PublishResponse');
   response.att('xmlns', 'http://sns.amazonaws.com/doc/2010-03-31/');
@@ -636,24 +646,25 @@ function subscribe(req, res) {
     case 'http':
     case 'https':
       var parsed = url.parse(req.query.Endpoint);
-      if (parsed.protocol != req.query.Protocol)
+      if (parsed.protocol != req.query.Protocol + ':')
         return error(res, 'InvalidParameter');
 
-      var subscription_arn = topic.TopicArn + ':' + get_request_id();
+      var subscription = {SubscriptionArn: topic.TopicArn + ':' + get_request_id(), endpoint: req.query.Endpoint};
       var token = crypto.randomBytes(128).toString('hex');
 
       var opts = {
-        endpoint: req.query.Endpoint,
-        topic_arn: topic.TopicArn,
-        subscription_arn: subscription_arn,
+        subscription: subscription,
+        topic: topic,
         token: token,
         message_type: 'SubscriptionConfirmation',
         timestamp: new Date().toISOString(),
       };
 
-      send_message(opts, function(confirm_res) {
-        if (confirm_res.statusCode == 200)
-          topic.unconfirmed[token] = {arn: subscription_arn, protocol: req.query.Protocol, endpoint: req.query.Endpoint};
+      publish_http(opts, function(err) {
+        if (err)
+          console.log('Failed to send subscription confirmation for topic ' + topic.TopicArn + ' to endpoint ' + req.query.Endpoint + ': ' + err);
+        else
+          topic.unconfirmed[token] = {arn: subscription.SubscriptionArn, protocol: req.query.Protocol, endpoint: req.query.Endpoint};
       });
       break;
 
