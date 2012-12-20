@@ -1,19 +1,33 @@
 {
   "name": "fake_sns",
-  "description": "A locally hosted duplicate of AWS Simple Notification Service",
-  "version": "0.0.1",
+  "preferGlobal": "true",
+  "description": "Locally hosted reimplementation of AWS Simple Notification Service for HTTP(S) endpoints",
+  "author": "Chase Douglas <chasedouglas@gmail.com>",
+  "version": "0.1.0",
+  "bin": {
+    "fake_sns": "fake_sns"
+  },
   "scripts": {
     "start": "node index.js"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/aspicltd/fake_sns.git"
+    "url": "https://github.com/corp186/fake_sns.git"
   },
+  "keywords": [
+    "sns",
+    "aws",
+    "notifications"
+  ],
   "dependencies": {
     "express": "*",
     "xmlbuilder": "*",
     "argparse": "*",
     "underscore": "*",
     "fibers": "*"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=0.8"
   }
 }
