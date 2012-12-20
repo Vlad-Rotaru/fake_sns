@@ -1,4 +1,4 @@
-fakeSNS
+FakeSNS
 ========
 
 Locally hosted reimplementation of AWS Simple Notification Service for HTTP(S) endpoints
