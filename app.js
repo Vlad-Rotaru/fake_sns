@@ -456,8 +456,11 @@ function publish_http(opts, callback) {
       });
       var success = Fiber.yield();
 
-      if (success)
-        return callback();
+      if (success) {
+        if (callback)
+          callback();
+        return;
+      }
 
       var delay;
       if (i < policy.numNoDelayRetries)
@@ -496,7 +499,8 @@ function publish_http(opts, callback) {
       Fiber.yield();
     }
 
-    callback(new Error('Failed to send message for topic ' + opts.topics.TopicArn + ' to HTTP(s) endpoint ' + opts.subscription.endpoint));
+    if (callback)
+      callback(new Error('Failed to send message for topic ' + opts.topics.TopicArn + ' to HTTP(s) endpoint ' + opts.subscription.endpoint));
   }).run();
 }
 
