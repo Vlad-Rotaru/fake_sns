@@ -1,9 +1,9 @@
 var crypto = require('crypto');
+var fs = require('fs');
 var http = require('http');
 var https = require('https');
 var url = require('url');
 var express = require('express');
-var http = require('http');
 var builder = require('xmlbuilder');
 var argparser = require('argparse').ArgumentParser;
 var _ = require('underscore');
@@ -29,7 +29,7 @@ var default_delivery_policy = {
 };
 
 var parser = new argparser({description: 'Fake Simple Notification Service'});
-parser.addArgument(['--port', '-p'], {help: 'The port number to use (default: 80)', type: 'int', defaultValue: 80});
+parser.addArgument(['--port', '-p'], {help: 'The port number to use (default: 443)', type: 'int', defaultValue: 443});
 parser.addArgument(['--region', '-r'], {help: 'The region used when creating topic ARNs (default: "us-east-1")', defaultValue: 'us-east-1'});
 parser.addArgument(['--account-id', '-a'], {help: 'The AWS account ID used when creating topic ARNs (default: 123456789012)', type: 'int', defaultValue: 123456789012});
 parser.addArgument(['--topic-limit', '-l'], {help: 'The limit of topics allowed (default: 100)', type: 'int', defaultValue: 100});
@@ -162,12 +162,12 @@ function send_message(options, callback) {
   if (options.message_type == 'SubscriptionConfirmation') {
     body.Token = options.token;
     body.Message = 'You have chosen to subscribe to the topic ' + options.topic.TopicArn + '.\nTo confirm the subscription, visit the SubscribeURL included in this message.';
-    body.SubscribeURL = 'http://' + args.subscribe_hostname + '/?Action=ConfirmSubscription&TopicArn=' + options.topic.TopicArn + '&Token=' + options.token;
+    body.SubscribeURL = 'https://' + args.subscribe_hostname + ':' + args.port + '/?Action=ConfirmSubscription&TopicArn=' + options.topic.TopicArn + '&Token=' + options.token;
   } else if (options.message_type == 'Notification') {
     if (options.subject)
       body.Subject = options.subject;
     body.Message = options.message;
-    body.UnsubscribeURL = 'http://' + args.subscribe_hostname + '/?Action=Unsubscribe&SubscriptionArn=' + options.subscription.SubscriptionArn;
+    body.UnsubscribeURL = 'https://' + args.subscribe_hostname + ':' + args.port + '/?Action=Unsubscribe&SubscriptionArn=' + options.subscription.SubscriptionArn;
   }
 
   req.end(JSON.stringify(body));
@@ -775,7 +775,11 @@ app.get('/', function(req, res) {
   }
 });
 
-var server = http.createServer(app);
+var https_options = {};
+https_options.cert = fs.readFileSync('ssl.crt');
+https_options.key = fs.readFileSync('ssl.key');
+
+var server = https.createServer(https_options, app);
 server.listen(args.port, function() {
   console.log('Fake SNS listening on port ' + args.port);
 });
