@@ -1,0 +1,18 @@
+{
+  "name": "fake_sns",
+  "description": "A locally hosted duplicate of AWS Simple Notification Service",
+  "version": "0.0.1",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aspicltd/fake_sns.git"
+  },
+  "dependencies": {
+    "express": "*",
+    "xmlbuilder": "*",
+    "argparse": "*",
+    "underscore": "*"
+  }
+}
