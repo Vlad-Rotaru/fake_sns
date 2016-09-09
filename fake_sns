@@ -62,10 +62,8 @@ var args = parser.parseArgs();
 
 var app = express();
 
-app.configure(function(){
-  app.use(express.logger('dev'));
-  app.use(app.router);
-});
+app.use(require('body-parser').urlencoded({ extended: true, limit: '5mb' }));
+app.use(require('body-parser').json({limit: '5mb'}));
 
 var next_request = 0;
 function get_request_id() {
@@ -365,7 +363,7 @@ function list_subscriptions(req, res) {
   var response = builder.create('ListSubscriptionsResponse');
   response.att('xmlns', 'http://sns.amazonaws.com/doc/2010-03-31/');
   var result = response.ele('ListSubscriptionsResult');
-  var subscriptions_element = response.ele('Subscriptions');
+  var subscriptions_element = result.ele('Subscriptions');
 
   var arns = Object.keys(subscriptions);
   for (var i = 0; i < 100 && start + i < arns.length; i++) {
@@ -528,6 +526,36 @@ function publish_http(opts, callback) {
   }).run();
 }
 
+function publish_lambda(options) {
+  var lambda = require('../' + options.subscription.endpoint);
+
+  var event = {
+    Records: [{
+      EventSource: 'aws:sns',
+      EventVersion: '1.0',
+      EventSubscriptionArn: options.subscription.SubscriptionArn,
+      Sns: {
+        Type: options.message_type,
+        MessageId: options.message_id,
+        TopicArn: options.topic.TopicArn,
+        Subject: options.subject,
+        Message: options.message.lambda || options.message.default,
+        Timestamp: options.timestamp,
+        SignatureVersion: '0',
+        Signature: 'None',
+        SigningCertURL: 'None'
+      }
+    }]
+  };
+
+  lambda.handler(event, {
+    succeed: function (result) {
+    },
+    fail: function (result) {
+    }
+  });
+}
+
 function publish(req, res) {
   if (!('Message' in req.query && 'TopicArn' in req.query))
     return error(res, 'MissingParameter');
@@ -575,7 +603,16 @@ function publish(req, res) {
 
   for (var arn in topic.subscriptions) {
     opts.subscription = topic.subscriptions[arn];
-    publish_http(opts);
+    switch (opts.subscription.protocol) {
+      case 'http':
+      case 'https':
+        publish_http(opts);
+        break;
+
+      case 'lambda':
+        publish_lambda(opts);
+        break;
+    }
   }
 
   var response = builder.create('PublishResponse');
@@ -706,6 +743,13 @@ function subscribe(req, res) {
     case 'sms':
     case 'sqs':
       return error(res, 'Unimplemented');
+
+    case 'lambda':
+      var request_id = get_request_id();
+      var subscription_arn = topic.TopicArn + ':' + request_id;
+      topic.subscriptions[subscription_arn] = {SubscriptionArn: subscription_arn, TopicArn: topic.TopicArn, Owner: args.account_id, ConfirmationWasAuthenticated: true, protocol: 'lambda', endpoint: req.query.Endpoint};
+      subscriptions[subscription_arn] = topic;
+      break;
   }
 
   var response = builder.create('SubscribeResponse');
@@ -735,7 +779,8 @@ function unsubscribe(req, res) {
   res.end(response.end({pretty: true, indent: '  '}));
 }
 
-app.get('/', function(req, res) {
+app.use(function(req, res) {
+  req.query = req.body;
   if (!('Action' in req.query))
     return error(res, 'MissingAction');
 
@@ -803,11 +848,11 @@ app.get('/', function(req, res) {
   }
 });
 
-var https_options = {};
-https_options.cert = fs.readFileSync('ssl.crt');
-https_options.key = fs.readFileSync('ssl.key');
+// var https_options = {};
+// https_options.cert = fs.readFileSync('ssl.crt');
+// https_options.key = fs.readFileSync('ssl.key');
 
-var server = https.createServer(https_options, app);
+var server = http.createServer(app);
 server.listen(args.port, function() {
   console.log('Fake SNS listening on port ' + args.port);
 });
