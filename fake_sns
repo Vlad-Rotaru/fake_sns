@@ -539,7 +539,7 @@ function publish_lambda(options) {
         MessageId: options.message_id,
         TopicArn: options.topic.TopicArn,
         Subject: options.subject,
-        Message: options.message.lambda || options.message.default,
+        Message: options.message.lambda || options.message.default || options.message,
         Timestamp: options.timestamp,
         SignatureVersion: '0',
         Signature: 'None',
@@ -550,8 +550,10 @@ function publish_lambda(options) {
 
   lambda.handler(event, {
     succeed: function (result) {
+      console.log('Lambda success:', options.subscription.endpoint, result);
     },
     fail: function (result) {
+      console.log('Lambda fail:', options.subscription.endpoint, result);
     }
   });
 }
