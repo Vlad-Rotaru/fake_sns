@@ -291,7 +291,7 @@ function get_subscription_attributes(req, res) {
 
     entry = attributes.ele('entry');
     entry.ele('key', key);
-  
+
     if (key == 'DeliveryPolicy')
       entry.ele('value', JSON.stringify(topic[key]));
     else
@@ -447,7 +447,7 @@ function list_topics(req, res) {
   var arns = Object.keys(topics);
   for (var i = 0; i < 100 && start + i < arns.length; i++) {
     var arn = arns[start + i];
-    
+
     var member = topics_element.ele('member');
     member.ele('TopicArn', arn);
   }
@@ -548,14 +548,28 @@ function publish_lambda(options) {
     }]
   };
 
-  lambda.handler(event, {
-    succeed: function (result) {
-      console.log('Lambda success:', options.subscription.endpoint, result);
-    },
-    fail: function (result) {
-      console.log('Lambda fail:', options.subscription.endpoint, result);
+  var succeed = function (result) {
+    console.log('Lambda success:', options.subscription.endpoint, result);
+  };
+  var fail = function (result) {
+    console.log('Lambda fail:', options.subscription.endpoint, result);
+  }
+
+  var context = {
+    succeed: succeed,
+    fail: fail
+  };
+
+  var handlerCallback = function (err, result) {
+    if (err) {
+      fail(err);
     }
-  });
+    else {
+      succeed(result);
+    }
+  };
+
+  lambda.handler(event, context, handlerCallback);
 }
 
 function publish(req, res) {
